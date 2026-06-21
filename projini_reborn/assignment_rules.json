@@ -1,0 +1,25 @@
+{
+  "default_strategy": "smart",
+  "employees": {
+    "Ralph Lopes": {
+      "locations": ["Mira Road", "Beyond Mira Road"],
+      "sources": ["99 Acres", "Referral"],
+      "priorities": ["Hot"]
+    },
+    "Sarah Jenkins": {
+      "locations": ["Andheri West", "Kandivali East"],
+      "sources": ["Google Ads", "Facebook Ads"],
+      "priorities": ["Warm"]
+    },
+    "David Miller": {
+      "locations": ["Thane West", "Ghodbunder Road"],
+      "sources": ["MagicBricks", "Housing.com"],
+      "priorities": ["Cold"]
+    },
+    "Emma Watson": {
+      "locations": ["Mira Road", "Thane West"],
+      "sources": ["Direct Walk-in", "Referral"],
+      "priorities": ["Hot", "Warm"]
+    }
+  }
+}
