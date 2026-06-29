@@ -8,7 +8,7 @@ Admin chatbot and CLI for lead search, summaries, assignment, activities, daily 
 python crm_admin_agent.py chat
 ```
 
-One-shot question:
+One-shot question
 
 ```powershell
 python crm_admin_agent.py ask "What should I do today?"

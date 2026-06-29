@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 
 DB_NAME = "leads.db"
 ENV_FILE = ".env"
-OPENROUTER_MODEL = "nex-agi/nex-n2-pro:free"
+OPENROUTER_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
@@ -764,12 +764,7 @@ Rules:
             method="POST",
         )
 
-        try:
-            with urllib.request.urlopen(request, timeout=60) as response:
-                data = json.loads(response.read().decode("utf-8"))
-            return data["choices"][0]["message"]["content"]
-        except (urllib.error.URLError, KeyError, IndexError, json.JSONDecodeError) as exc:
-            return f"LLM request failed: {exc}"
+        return send_llm_request(request)
 
     def call_llm_messages(self, messages):
         api_key = os.environ.get("API_KEY") or os.environ.get("OPENROUTER_API_KEY")
@@ -792,12 +787,7 @@ Rules:
             method="POST",
         )
 
-        try:
-            with urllib.request.urlopen(request, timeout=60) as response:
-                data = json.loads(response.read().decode("utf-8"))
-            return data["choices"][0]["message"]["content"]
-        except (urllib.error.URLError, KeyError, IndexError, json.JSONDecodeError) as exc:
-            return f"LLM request failed: {exc}"
+        return send_llm_request(request)
 
     def chatbot_system_prompt(self):
         return f"""
@@ -834,6 +824,10 @@ Rules:
 """.strip()
 
     def chat_once(self, user_message, history):
+        pending_update = pending_duplicate_update(user_message, history, self.table_columns("Lead_Details"))
+        if pending_update:
+            return self.apply_pending_duplicate_update(pending_update)
+
         messages = [{"role": "system", "content": self.chatbot_system_prompt()}]
         messages.extend(history[-8:])
         messages.append({"role": "user", "content": user_message})
@@ -973,6 +967,181 @@ Rules:
             print(f"Agent: {answer}\n")
             history.append({"role": "user", "content": user_message})
             history.append({"role": "assistant", "content": answer})
+
+    def apply_pending_duplicate_update(self, pending_update):
+        results = []
+        for lead_id in pending_update["lead_ids"]:
+            results.append(
+                self.update_record(
+                    "Lead_Details",
+                    lead_id,
+                    {pending_update["column"]: pending_update["new_value"]},
+                    pk_column="LeadId",
+                )
+            )
+
+        errors = [item["error"] for item in results if isinstance(item, dict) and "error" in item]
+        updated_ids = [
+            item["primary_key_value"]
+            for item in results
+            if isinstance(item, dict) and "primary_key_value" in item
+        ]
+        if errors and not updated_ids:
+            return "I could not apply that update: " + "; ".join(errors)
+
+        message = (
+            f"Updated {pending_update['column']} to '{pending_update['new_value']}' "
+            f"for LeadIds: {', '.join(str(lead_id) for lead_id in updated_ids)}."
+        )
+        if errors:
+            message += " Some rows were skipped: " + "; ".join(errors)
+        return message
+
+
+def send_llm_request(request):
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        return f"LLM request failed: HTTP {exc.code} {extract_llm_error(body)}"
+    except urllib.error.URLError as exc:
+        return f"LLM request failed: {exc}"
+
+    try:
+        data = json.loads(body)
+        return extract_llm_content(data)
+    except (ValueError, KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+        return f"LLM request failed: {exc}"
+
+
+def extract_llm_content(data):
+    if not isinstance(data, dict):
+        raise ValueError("LLM response was not a JSON object.")
+
+    if data.get("error"):
+        raise ValueError(extract_llm_error(data))
+
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise ValueError(f"LLM response did not include choices. {extract_llm_error(data)}")
+
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        raise ValueError("LLM response choice was not a JSON object.")
+
+    message = first_choice.get("message")
+    if isinstance(message, dict) and isinstance(message.get("content"), str):
+        return message["content"]
+    if isinstance(first_choice.get("text"), str):
+        return first_choice["text"]
+
+    raise ValueError(f"LLM response did not include message content. {extract_llm_error(data)}")
+
+
+def extract_llm_error(raw):
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", errors="replace")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return raw.strip()[:500] or "No error body returned."
+    if isinstance(raw, dict):
+        error = raw.get("error")
+        if isinstance(error, dict):
+            message = error.get("message") or error.get("code") or error.get("type")
+            if message:
+                return str(message)
+        if isinstance(error, str):
+            return error
+        message = raw.get("message") or raw.get("detail")
+        if message:
+            return str(message)
+        return json.dumps(raw, ensure_ascii=False)[:500]
+    return str(raw)[:500]
+
+
+def pending_duplicate_update(user_message, history, lead_columns):
+    if not history or len(history) < 2:
+        return None
+
+    last_assistant = history[-1].get("content", "")
+    previous_user = history[-2].get("content", "")
+    offered_ids = extract_offered_lead_ids(last_assistant)
+    if not offered_ids:
+        return None
+
+    selected_ids = selected_pending_lead_ids(user_message, offered_ids)
+    if not selected_ids:
+        return None
+
+    update_request = parse_lead_update_request(previous_user, lead_columns)
+    if not update_request:
+        return None
+
+    update_request["lead_ids"] = selected_ids
+    return update_request
+
+
+def extract_offered_lead_ids(text):
+    if not isinstance(text, str) or not re.search(r"\blead\s*ids?\b", text, flags=re.IGNORECASE):
+        return []
+
+    match = re.search(r"Lead\s*Ids?\s*:\s*([0-9,\sand]+)", text, flags=re.IGNORECASE)
+    if not match:
+        return []
+    return [int(value) for value in re.findall(r"\d+", match.group(1))]
+
+
+def selected_pending_lead_ids(user_message, offered_ids):
+    lowered = user_message.lower().strip()
+    if lowered in {"confirm", "confirmed", "yes", "y", "all", "all four", "update all", "confirm all"}:
+        return offered_ids
+
+    requested_ids = [int(value) for value in re.findall(r"\d+", user_message)]
+    selected = [lead_id for lead_id in requested_ids if lead_id in offered_ids]
+    return selected
+
+
+def parse_lead_update_request(text, lead_columns):
+    if not isinstance(text, str):
+        return None
+
+    column = extract_update_column(text, lead_columns)
+    if not column:
+        return None
+
+    new_value = extract_update_value(text, column)
+    if not new_value:
+        return None
+
+    return {"column": column, "new_value": new_value}
+
+
+def extract_update_column(text, lead_columns):
+    for column in sorted(lead_columns, key=len, reverse=True):
+        if column in {"LeadId", "CreatedAt", "UpdatedAt"}:
+            continue
+        pattern = rf"(?<![A-Za-z0-9_]){re.escape(column)}(?![A-Za-z0-9_])"
+        if re.search(pattern, text, flags=re.IGNORECASE):
+            return column
+    return None
+
+
+def extract_update_value(text, column):
+    pattern = rf"{re.escape(column)}\s+(?:to|as|=)\s+(.+)$"
+    match = re.search(pattern, text, flags=re.IGNORECASE)
+    if not match:
+        match = re.search(r"\b(?:to|as|=)\s+(.+)$", text, flags=re.IGNORECASE)
+    if not match:
+        return None
+
+    value = match.group(1).strip()
+    value = re.sub(r"[.?!]\s*$", "", value).strip()
+    if (value.startswith("'") and value.endswith("'")) or (value.startswith('"') and value.endswith('"')):
+        value = value[1:-1].strip()
+    return value or None
 
 
 def quote_identifier(identifier):
