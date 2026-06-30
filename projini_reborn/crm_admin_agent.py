@@ -11,8 +11,11 @@ from datetime import datetime, timedelta
 
 DB_NAME = "leads.db"
 ENV_FILE = ".env"
-OPENROUTER_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
+OPENROUTER_MODEL = "z-ai/glm-5.2"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+DEFAULT_LLM_MAX_TOKENS = 1024
+DEFAULT_LLM_TOOL_RESULT_MAX_CHARS = 6000
+DEFAULT_LLM_VALUE_CATALOG_MAX_VALUES = 12
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
 ASSIGNMENT_RULES_FILE = "assignment_rules.json"
@@ -35,6 +38,40 @@ def load_env(path=ENV_FILE):
                 continue
             key, value = line.split("=", 1)
             os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+def env_int(name, default, minimum=None, maximum=None):
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return default
+
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
+def llm_max_tokens():
+    return env_int("OPENROUTER_MAX_TOKENS", DEFAULT_LLM_MAX_TOKENS, minimum=128, maximum=8192)
+
+
+def llm_tool_result_max_chars():
+    return env_int("LLM_TOOL_RESULT_MAX_CHARS", DEFAULT_LLM_TOOL_RESULT_MAX_CHARS, minimum=1000, maximum=20000)
+
+
+def llm_value_catalog_max_values():
+    return env_int(
+        "LLM_VALUE_CATALOG_MAX_VALUES",
+        DEFAULT_LLM_VALUE_CATALOG_MAX_VALUES,
+        minimum=3,
+        maximum=25,
+    )
 
 
 class CRMAdminAgent:
@@ -99,7 +136,10 @@ class CRMAdminAgent:
                 return column["name"]
         return None
 
-    def value_catalog(self, max_values=25):
+    def value_catalog(self, max_values=None):
+        if max_values is None:
+            max_values = llm_value_catalog_max_values()
+
         catalog = {}
         with self.connect() as conn:
             for table, columns in self.schema().items():
@@ -741,6 +781,7 @@ Rules:
 
         payload = {
             "model": OPENROUTER_MODEL,
+            "max_tokens": llm_max_tokens(),
             "messages": [
                 {
                     "role": "system",
@@ -773,6 +814,7 @@ Rules:
 
         payload = {
             "model": OPENROUTER_MODEL,
+            "max_tokens": llm_max_tokens(),
             "messages": messages,
         }
         request = urllib.request.Request(
@@ -858,7 +900,10 @@ Rules:
             messages.append(
                 {
                     "role": "user",
-                    "content": "Tool result:\n" + compact_json(tool_result),
+                    "content": "Tool result:\n" + compact_json(
+                        tool_result,
+                        max_chars=llm_tool_result_max_chars(),
+                    ),
                 }
             )
 

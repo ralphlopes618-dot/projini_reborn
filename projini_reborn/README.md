@@ -43,7 +43,16 @@ The agent reads `.env` automatically and supports either `API_KEY` or `OPENROUTE
 Configured model:
 
 ```text
-nex-agi/nex-n2-pro:free
+z-ai/glm-5.2
+```
+
+Token usage is capped by default so OpenRouter does not request a huge completion budget.
+Optional `.env` settings:
+
+```text
+OPENROUTER_MAX_TOKENS=1024
+LLM_TOOL_RESULT_MAX_CHARS=6000
+LLM_VALUE_CATALOG_MAX_VALUES=12
 ```
 
 ## Assignment Rules
