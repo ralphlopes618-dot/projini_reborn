@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import random
+from datetime import datetime, timedelta
 
 DB_NAME = 'leads.db'
 SCHEMA_FILE = 'schema.sql'
@@ -40,6 +41,18 @@ def generate_sample_leads(count=100):
     
     activity_types = ['Call', 'Meeting', 'Task', 'Site Visit']
     activity_statuses = ['Pending', 'Completed', 'Cancelled']
+    meeting_responses = [
+        'Interested',
+        'Not Interested',
+        'Call Back Later',
+        'Follow-up Required',
+        'Site Visit Scheduled',
+        'Proposal Requested',
+        'Price Negotiation',
+        'No Response',
+        'Invalid / Wrong Number',
+        'Customer Cancelled'
+    ]
     activity_notes = [
         "Followed up to check interest. Requested callback next week.",
         "Detailed pricing breakdown discussed. Prefers 2 BHK config.",
@@ -86,20 +99,33 @@ def generate_sample_leads(count=100):
             
         source = sources[i % len(sources)]
         
-        # Assign an active property (leave 20% leads unassigned for realism)
-        assigned_property = active_properties[i % len(active_properties)] if i % 5 != 0 else None
-        
         # Generate activity details (leave some leads unassigned for realism)
         if i % 3 == 0:
             activity_type = None
             activity_status = None
             activity_note = None
+            meeting_response = None
+            activity_datetime = None
+            feedback = None
         else:
             activity_type = activity_types[i % len(activity_types)]
             activity_status = random.choice(activity_statuses)
             activity_note = random.choice(activity_notes)
+            meeting_response = None
+            activity_datetime = None
+            if activity_status == 'Pending':
+                activity_datetime = (
+                    datetime.now() + timedelta(days=(i % 14) + 1, hours=i % 8)
+                ).strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                meeting_response = meeting_responses[i % len(meeting_responses)]
+            feedback = activity_note
             
-        leads.append((first, last, mobile, email, address, requirements, assignee, stage, source, priority, assigned_property, activity_type, activity_status, activity_note))
+        leads.append((
+            first, last, mobile, email, address, requirements, assignee, stage,
+            source, priority, None, activity_type, activity_status,
+            activity_note, meeting_response, activity_datetime, feedback
+        ))
         
     return leads
 
@@ -144,8 +170,10 @@ def init_db():
     print("Inserting property list...")
     for prop in active_properties:
         cursor.execute("INSERT OR IGNORE INTO Properties (PropertyName, IsActive) VALUES (?, 1)", (prop,))
+        cursor.execute("INSERT OR IGNORE INTO AvailableProperties (PropertyName, IsActive) VALUES (?, 1)", (prop,))
     for prop in inactive_properties:
         cursor.execute("INSERT OR IGNORE INTO Properties (PropertyName, IsActive) VALUES (?, 0)", (prop,))
+        cursor.execute("INSERT OR IGNORE INTO AvailableProperties (PropertyName, IsActive) VALUES (?, 0)", (prop,))
     conn.commit()
     print("Seeded properties list.")
 
@@ -154,8 +182,12 @@ def init_db():
     
     print(f"Inserting {len(sample_leads)} sample lead details...")
     cursor.executemany("""
-        INSERT INTO Lead_Details (FirstName, LastName, MobileNo, EmailId, Address, Requirements, AssignedTo, Stage, Source, Priority, AssignedProperty, ActivityType, ActivityStatus, ActivityNote)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO Lead_Details (
+            FirstName, LastName, MobileNo, EmailId, Address, Requirements,
+            AssignedTo, Stage, Source, Priority, AssignedProperties, ActivityType,
+            ActivityStatus, ActivityNote, MeetingResponse, ActivityDateTime, Feedback
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, sample_leads)
     conn.commit()
     print(f"Inserted {len(sample_leads)} sample leads with assigned properties and activities.")

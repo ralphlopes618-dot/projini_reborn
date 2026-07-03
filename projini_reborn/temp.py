@@ -1,19 +1,3 @@
-# import sqlite3
-
-# conn = sqlite3.connect('leads.db')
-# cursor = conn.cursor()
-
-# # Execute query to fetch all first names
-# cursor.execute("SELECT FirstName FROM Lead_Details")
-# first_names = [row[0] for row in cursor.fetchall()]
-
-# # Print the names
-# print(f"Fetched {len(first_names)} first names:")
-# print(first_names)
-
-# conn.close()
-
-
 import sqlite3
 
 conn = sqlite3.connect('leads.db')

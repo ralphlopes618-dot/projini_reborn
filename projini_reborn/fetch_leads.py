@@ -12,12 +12,14 @@ def fetch_all_leads():
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT LeadId, FirstName, LastName, MobileNo, EmailId, AssignedTo, Stage, Source, Priority, AssignedProperty, ActivityType, ActivityStatus, ActivityNote 
+        SELECT LeadId, FirstName, LastName, MobileNo, EmailId, AssignedTo, Stage,
+               Source, Priority, AssignedProperties, ActivityType, ActivityStatus,
+               ActivityNote, MeetingResponse, ActivityDateTime, Feedback
         FROM Lead_Details
     """)
     rows = cursor.fetchall()
     for row in rows:
-        print(f"ID: {row[0]} | Name: {row[1]} {row[2]} | Phone: {row[3]} | Assigned: {row[5]} | Stage: {row[6]} | Source: {row[7]} | Priority: {row[8]} | Property: {row[9]} | Activity: {row[10]} ({row[11]}) - Note: {row[12]}")
+        print(f"ID: {row[0]} | Name: {row[1]} {row[2]} | Phone: {row[3]} | Assigned: {row[5]} | Stage: {row[6]} | Source: {row[7]} | Priority: {row[8]} | Property: {row[9]} | Activity: {row[10]} ({row[11]}) - Note: {row[12]} | Response: {row[13]} | DateTime: {row[14]} | Feedback: {row[15]}")
     conn.close()
 
 def fetch_hot_leads():
@@ -69,7 +71,7 @@ def fetch_active_properties():
     cursor = conn.cursor()
     cursor.execute("""
         SELECT PropertyId, PropertyName 
-        FROM Properties 
+        FROM AvailableProperties
         WHERE IsActive = 1
     """)
     rows = cursor.fetchall()
@@ -82,10 +84,10 @@ def fetch_leads_by_property(property_name):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT LeadId, FirstName, LastName, Stage, Priority 
-        FROM Lead_Details 
-        WHERE AssignedProperty = ?
-    """, (property_name,))
+        SELECT LeadId, FirstName, LastName, Stage, Priority
+        FROM Lead_Details
+        WHERE AssignedProperties LIKE ?
+    """, (f"%{property_name}%",))
     rows = cursor.fetchall()
     for row in rows:
         print(f"ID: {row[0]} | Name: {row[1]} {row[2]} | Stage: {row[3]} | Priority: {row[4]}")
