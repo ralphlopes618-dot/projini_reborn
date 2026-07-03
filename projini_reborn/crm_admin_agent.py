@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 
 DB_NAME = "leads.db"
 ENV_FILE = ".env"
-OPENROUTER_MODEL = "z-ai/glm-5.2"
+OPENROUTER_MODEL = "poolside/laguna-xs.2:free"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_LLM_MAX_TOKENS = 1024         # enough tokens to finish multi-option activity prompts
 DEFAULT_LLM_TOOL_RESULT_MAX_CHARS = 3000  # reduced from 6000 to trim tool result payload
