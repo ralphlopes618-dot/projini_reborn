@@ -108,15 +108,23 @@ Useful options:
 ```powershell
 python crm_admin_agent.py voice --no-speak
 python crm_admin_agent.py voice --device-index 1
+python crm_admin_agent.py voice --language en-IN
+python crm_admin_agent.py voice --phrase-time-limit 35
+python crm_admin_agent.py voice --pause-threshold 1.8
 python crm_admin_agent.py voice --recognizer sphinx
 ```
 
-The default recognizer is `google`, which uses the SpeechRecognition Google web recognizer. Use `--recognizer sphinx` only after installing an offline Sphinx setup such as `pocketsphinx`.
+The default recognizer is `google`, which uses the SpeechRecognition Google web recognizer with Indian English (`en-IN`) by default. Voice mode also applies small CRM-specific corrections for common misheard words, such as `painting` -> `pending`, `meating` -> `meeting`, and spoken lead numbers like `lead three` -> `lead 3`.
+
+If the bot cuts you off before you finish speaking, increase `--phrase-time-limit` and `--pause-threshold`. Use `--recognizer sphinx` only after installing an offline Sphinx setup such as `pocketsphinx`.
 
 Optional `.env` settings:
 
 ```text
 VOICE_RECOGNIZER=google
+VOICE_LANGUAGE=en-IN
+VOICE_PAUSE_THRESHOLD=1.4
+VOICE_ENERGY_THRESHOLD=300
 VOICE_RATE=175
 VOICE_RESPONSE_MAX_CHARS=1200
 ```

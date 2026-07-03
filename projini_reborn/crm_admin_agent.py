@@ -1,4 +1,5 @@
 import argparse
+import difflib
 import json
 import os
 import re
@@ -68,6 +69,23 @@ def env_int(name, default, minimum=None, maximum=None):
 
     try:
         value = int(raw_value)
+    except (TypeError, ValueError):
+        return default
+
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
+def env_float(name, default, minimum=None, maximum=None):
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+
+    try:
+        value = float(raw_value)
     except (TypeError, ValueError):
         return default
 
@@ -1262,8 +1280,10 @@ Rules:
         self,
         recognizer_backend="google",
         device_index=None,
-        listen_timeout=6,
-        phrase_time_limit=12,
+        listen_timeout=8,
+        phrase_time_limit=25,
+        language="en-IN",
+        pause_threshold=1.4,
         speak=True,
     ):
         if hasattr(sys.stdout, "reconfigure"):
@@ -1273,6 +1293,8 @@ Rules:
             voice = VoiceIO(
                 recognizer_backend=recognizer_backend,
                 device_index=device_index,
+                language=language,
+                pause_threshold=pause_threshold,
                 speak=speak,
             )
         except VoiceUnavailableError as exc:
@@ -1319,7 +1341,13 @@ Rules:
                         voice.say("Speech recognition failed. Please check the recognizer setup.")
                         continue
 
-                    print(f"You: {user_message}")
+                    corrected_message = normalize_voice_command(user_message, history)
+                    if corrected_message != user_message:
+                        print(f"You: {user_message}")
+                        print(f"Heard as: {corrected_message}")
+                        user_message = corrected_message
+                    else:
+                        print(f"You: {user_message}")
                     if user_message.lower().strip() in {"exit", "quit", "q", "stop voice", "stop listening"}:
                         print("Agent: Bye.")
                         voice.say("Bye.")
@@ -2493,8 +2521,148 @@ class VoiceUnavailableError(RuntimeError):
     pass
 
 
+VOICE_NUMBER_WORDS = {
+    "zero": "0",
+    "one": "1",
+    "two": "2",
+    "to": "2",
+    "too": "2",
+    "three": "3",
+    "tree": "3",
+    "four": "4",
+    "for": "4",
+    "five": "5",
+    "six": "6",
+    "seven": "7",
+    "eight": "8",
+    "ate": "8",
+    "nine": "9",
+    "ten": "10",
+}
+
+VOICE_PHRASE_REPLACEMENTS = (
+    (r"\bmeating\b", "meeting"),
+    (r"\bmeting\b", "meeting"),
+    (r"\bsight visit\b", "site visit"),
+    (r"\bside visit\b", "site visit"),
+    (r"\bsite visual\b", "site visit"),
+    (r"\bpanting\b", "pending"),
+    (r"\bpainting\b", "pending"),
+    (r"\bending\b", "pending"),
+    (r"\bpanding\b", "pending"),
+    (r"\bpen ding\b", "pending"),
+    (r"\bcancel\b", "cancelled"),
+    (r"\bcanceled\b", "cancelled"),
+    (r"\bcomplete\b", "completed"),
+    (r"\blid\b", "lead"),
+    (r"\bleed\b", "lead"),
+    (r"\bleads id\b", "lead"),
+    (r"\bassigned 2\b", "assigned to"),
+    (r"\bassign 2\b", "assign to"),
+)
+
+
+def best_google_transcript(result):
+    if isinstance(result, str):
+        return result
+    if not isinstance(result, dict):
+        return ""
+
+    alternatives = result.get("alternative") or []
+    if not alternatives:
+        return ""
+
+    best = max(
+        alternatives,
+        key=lambda item: item.get("confidence", 0) if isinstance(item, dict) else 0,
+    )
+    if isinstance(best, dict):
+        return best.get("transcript", "")
+    return ""
+
+
+def normalize_voice_command(text, history=None):
+    corrected = re.sub(r"\s+", " ", text or "").strip()
+    if not corrected:
+        return corrected
+
+    lower_context = " ".join(
+        msg.get("content", "")
+        for msg in (history or [])[-4:]
+        if msg.get("role") == "assistant"
+    ).lower()
+    activity_context = bool(
+        re.search(r"\b(activity|meeting|call|task|site visit|status|feedback|assigned to)\b", corrected.lower())
+        or re.search(r"\b(activity|meeting|call|task|site visit|status|feedback|assigned to)\b", lower_context)
+    )
+
+    for pattern, replacement in VOICE_PHRASE_REPLACEMENTS:
+        corrected = re.sub(pattern, replacement, corrected, flags=re.IGNORECASE)
+
+    corrected = normalize_lead_number_words(corrected)
+
+    if activity_context:
+        corrected = normalize_activity_words(corrected)
+
+    return re.sub(r"\s+", " ", corrected).strip()
+
+
+def normalize_lead_number_words(text):
+    def replace_match(match):
+        number_word = match.group(1).lower()
+        return f"lead {VOICE_NUMBER_WORDS.get(number_word, number_word)}"
+
+    return re.sub(
+        r"\blead\s+(" + "|".join(re.escape(word) for word in VOICE_NUMBER_WORDS) + r")\b",
+        replace_match,
+        text,
+        flags=re.IGNORECASE,
+    )
+
+
+def normalize_activity_words(text):
+    words = text.split()
+    valid_terms = {
+        "pending": ("pending", "painting", "panding", "panting", "ending"),
+        "completed": ("completed", "complete", "competed"),
+        "cancelled": ("cancelled", "canceled", "cancel", "cancels"),
+        "meeting": ("meeting", "meating", "meting"),
+        "call": ("call", "called"),
+        "task": ("task", "tasks"),
+    }
+    reverse_terms = {
+        variant: canonical
+        for canonical, variants in valid_terms.items()
+        for variant in variants
+    }
+
+    normalized = []
+    for word in words:
+        prefix = re.match(r"^\W*", word).group(0)
+        suffix = re.search(r"\W*$", word).group(0)
+        core = word[len(prefix) : len(word) - len(suffix) if suffix else len(word)]
+        lowered = core.lower()
+        replacement = reverse_terms.get(lowered)
+        if not replacement:
+            match = difflib.get_close_matches(lowered, valid_terms.keys(), n=1, cutoff=0.84)
+            replacement = match[0] if match else None
+        normalized.append(f"{prefix}{replacement or core}{suffix}")
+
+    result = " ".join(normalized)
+    if re.search(r"\bstatus\b", result, flags=re.IGNORECASE):
+        result = re.sub(r"\bstarted\b", "pending", result, flags=re.IGNORECASE)
+    return result
+
+
 class VoiceIO:
-    def __init__(self, recognizer_backend="google", device_index=None, speak=True):
+    def __init__(
+        self,
+        recognizer_backend="google",
+        device_index=None,
+        language="en-IN",
+        pause_threshold=1.4,
+        speak=True,
+    ):
         try:
             import speech_recognition as speech_recognition_module
         except ImportError as exc:
@@ -2508,9 +2676,12 @@ class VoiceIO:
         self.unknown_value_error = self.sr.UnknownValueError
         self.request_error = self.sr.RequestError
         self.recognizer_backend = recognizer_backend
+        self.language = language
         self.recognizer = self.sr.Recognizer()
-        self.recognizer.pause_threshold = 0.8
+        self.recognizer.pause_threshold = pause_threshold
+        self.recognizer.non_speaking_duration = 0.6
         self.recognizer.dynamic_energy_threshold = True
+        self.recognizer.energy_threshold = env_int("VOICE_ENERGY_THRESHOLD", 300, minimum=50, maximum=4000)
 
         try:
             self.microphone = self.sr.Microphone(device_index=device_index)
@@ -2529,7 +2700,7 @@ class VoiceIO:
             except Exception as exc:
                 print(f"Text-to-speech is unavailable, so I will print responses only: {exc}")
 
-    def listen(self, source, timeout=6, phrase_time_limit=12):
+    def listen(self, source, timeout=8, phrase_time_limit=25):
         audio = self.recognizer.listen(
             source,
             timeout=timeout,
@@ -2537,7 +2708,15 @@ class VoiceIO:
         )
         if self.recognizer_backend == "sphinx":
             return self.recognizer.recognize_sphinx(audio).strip()
-        return self.recognizer.recognize_google(audio).strip()
+        result = self.recognizer.recognize_google(
+            audio,
+            language=self.language,
+            show_all=True,
+        )
+        transcript = best_google_transcript(result)
+        if not transcript:
+            raise self.unknown_value_error()
+        return transcript.strip()
 
     def say(self, text):
         if not self.engine or not text:
@@ -2616,12 +2795,23 @@ def main():
         help="Speech recognition backend. google is easiest; sphinx works offline if pocketsphinx is installed.",
     )
     voice_parser.add_argument("--device-index", type=int, help="Microphone device index")
-    voice_parser.add_argument("--timeout", type=float, default=6, help="Seconds to wait for speech to start")
+    voice_parser.add_argument("--timeout", type=float, default=8, help="Seconds to wait for speech to start")
     voice_parser.add_argument(
         "--phrase-time-limit",
         type=float,
-        default=12,
+        default=25,
         help="Maximum seconds for each spoken command",
+    )
+    voice_parser.add_argument(
+        "--language",
+        default=os.environ.get("VOICE_LANGUAGE", "en-IN"),
+        help="Recognition language code for Google recognizer, for example en-IN or en-US",
+    )
+    voice_parser.add_argument(
+        "--pause-threshold",
+        type=float,
+        default=env_float("VOICE_PAUSE_THRESHOLD", 1.4, minimum=0.4, maximum=4.0),
+        help="Seconds of silence before a phrase is considered complete",
     )
     voice_parser.add_argument("--no-speak", action="store_true", help="Listen by voice but print responses only")
     subparsers.add_parser("schema")
@@ -2693,6 +2883,8 @@ def main():
                 device_index=args.device_index,
                 listen_timeout=args.timeout,
                 phrase_time_limit=args.phrase_time_limit,
+                language=args.language,
+                pause_threshold=args.pause_threshold,
                 speak=not args.no_speak,
             )
         )
