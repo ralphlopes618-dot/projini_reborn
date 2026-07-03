@@ -2,6 +2,31 @@
 
 Admin chatbot and CLI for lead search, summaries, assignment, activities, daily queues, and health flags.
 
+## Setup
+
+Create and activate a project virtual environment before installing voice libraries:
+
+```powershell
+cd C:\Users\elson\Downloads\projini_reborn\projini_reborn
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+If PowerShell blocks activation on your machine, allow it for the current terminal session and activate again:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+```
+
+When the environment is active, your prompt should show `(.venv)`. To leave it later:
+
+```powershell
+deactivate
+```
+
 ## Run
 
 ```powershell
@@ -11,7 +36,6 @@ python crm_admin_agent.py chat
 Voice chat
 
 ```powershell
-python -m pip install -r requirements.txt
 python crm_admin_agent.py voice
 ```
 
