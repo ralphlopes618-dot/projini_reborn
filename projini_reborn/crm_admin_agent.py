@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 
 DB_NAME = "leads.db"
 ENV_FILE = ".env"
-OPENROUTER_MODEL = "poolside/laguna-xs.2:free"
+OPENROUTER_MODEL = "poolside/laguna-xs-2.1"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_LLM_MAX_TOKENS = 1024         # enough tokens to finish multi-option activity prompts
 DEFAULT_LLM_TOOL_RESULT_MAX_CHARS = 3000  # reduced from 6000 to trim tool result payload
@@ -2581,6 +2581,86 @@ def best_google_transcript(result):
     return ""
 
 
+def google_transcript_alternatives(result):
+    if isinstance(result, str):
+        transcript = result.strip()
+        return [transcript] if transcript else []
+    if not isinstance(result, dict):
+        return []
+
+    transcripts = []
+    seen = set()
+    for alternative in result.get("alternative") or []:
+        if isinstance(alternative, dict):
+            transcript = str(alternative.get("transcript") or "").strip()
+        else:
+            transcript = str(alternative or "").strip()
+        transcript_key = transcript.lower()
+        if transcript and transcript_key not in seen:
+            transcripts.append(transcript)
+            seen.add(transcript_key)
+    return transcripts
+
+
+CONFIRMATION_YES_PATTERNS = (
+    r"\byes\b",
+    r"\byeah\b",
+    r"\byep\b",
+    r"\byup\b",
+    r"\bya\b",
+    r"\byah\b",
+    r"\byas\b",
+    r"\byesh\b",
+    r"\bsure\b",
+    r"\bok\b",
+    r"\bokay\b",
+    r"\bconfirm\b",
+    r"\bconfirmed\b",
+    r"\ballow\b",
+    r"\bproceed\b",
+    r"\bgo ahead\b",
+    r"\bdo it\b",
+    r"\bcorrect\b",
+    r"\baffirmative\b",
+)
+
+CONFIRMATION_NO_PATTERNS = (
+    r"\bno\b",
+    r"\bnope\b",
+    r"\bnah\b",
+    r"\bcancel\b",
+    r"\bcancelled\b",
+    r"\bcanceled\b",
+    r"\bstop\b",
+    r"\bdeny\b",
+    r"\bnegative\b",
+    r"\bdo not\b",
+    r"\bdon't\b",
+)
+
+
+def parse_confirmation_response(text):
+    normalized = re.sub(r"\s+", " ", text or "").strip().lower()
+    if not normalized:
+        return None
+    normalized = re.sub(r"[^\w\s']", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+
+    matches = []
+    for pattern in CONFIRMATION_YES_PATTERNS:
+        match = re.search(pattern, normalized)
+        if match:
+            matches.append((match.start(), True))
+    for pattern in CONFIRMATION_NO_PATTERNS:
+        match = re.search(pattern, normalized)
+        if match:
+            matches.append((match.start(), False))
+
+    if not matches:
+        return None
+    return min(matches, key=lambda item: item[0])[1]
+
+
 def normalize_voice_command(text, history=None):
     corrected = re.sub(r"\s+", " ", text or "").strip()
     if not corrected:
@@ -2718,6 +2798,40 @@ class VoiceIO:
             raise self.unknown_value_error()
         return transcript.strip()
 
+    def listen_confirmation(self, source, timeout=6, phrase_time_limit=5):
+        audio = self.recognizer.listen(
+            source,
+            timeout=timeout,
+            phrase_time_limit=phrase_time_limit,
+        )
+        if self.recognizer_backend == "sphinx":
+            transcript = self.recognizer.recognize_sphinx(audio).strip()
+            return transcript, parse_confirmation_response(transcript)
+
+        candidates = []
+        seen = set()
+        languages = [self.language, "en-US", "en-GB"]
+        for language in dict.fromkeys(lang for lang in languages if lang):
+            result = self.recognizer.recognize_google(
+                audio,
+                language=language,
+                show_all=True,
+            )
+            for transcript in google_transcript_alternatives(result):
+                transcript_key = transcript.lower()
+                if transcript_key in seen:
+                    continue
+                candidates.append(transcript)
+                seen.add(transcript_key)
+
+                decision = parse_confirmation_response(transcript)
+                if decision is not None:
+                    return transcript, decision
+
+        if not candidates:
+            raise self.unknown_value_error()
+        return candidates[0], None
+
     def say(self, text):
         if not self.engine or not text:
             return
@@ -2735,7 +2849,11 @@ class VoiceIO:
 
         for _ in range(3):
             try:
-                response = self.listen(source, timeout=listen_timeout, phrase_time_limit=4).lower()
+                response, decision = self.listen_confirmation(
+                    source,
+                    timeout=listen_timeout,
+                    phrase_time_limit=5,
+                )
             except self.wait_timeout_error:
                 print("No confirmation heard.")
                 self.say("I did not hear a confirmation. Please say yes or no.")
@@ -2749,9 +2867,9 @@ class VoiceIO:
                 return False
 
             print(f"You confirmed: {response}")
-            if response in {"yes", "yeah", "yep", "confirm", "confirmed", "allow", "okay", "ok"}:
+            if decision is True:
                 return True
-            if response in {"no", "nope", "cancel", "stop", "do not", "don't", "deny"}:
+            if decision is False:
                 return False
 
             self.say("Please say yes to confirm, or no to cancel.")
