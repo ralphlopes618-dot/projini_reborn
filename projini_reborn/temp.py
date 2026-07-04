@@ -19,7 +19,7 @@ cursor = conn.cursor()
 
 cursor.execute("SELECT AssignedTo FROM Lead_Details")
 rows = cursor.fetchall()
-
+print("hello")
 print(f"Fetched {len(rows)} assigned-to values:")
 for row in rows:
     print(row[0])
